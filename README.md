@@ -347,6 +347,65 @@ This data will survive container deletion!
 
 컨테이너를 삭제해도 별도로 관리되는 `site-data` 볼륨은 남았다. 새 컨테이너에 같은 볼륨을 `/data`로 연결하자 기존 메시지를 읽을 수 있었다. 바인드 마운트가 호스트의 특정 경로를 연결하는 방식이라면, 명명된 볼륨은 Docker가 저장 위치를 관리하는 방식이다.
 
+### 9.1 데이터 손실 방지를 위한 볼륨 백업
+
+볼륨은 컨테이너와 별도로 유지되지만, 볼륨 자체 삭제나 데이터 덮어쓰기까지 방지하지는 못한다. 따라서 삭제·수정 작업 전에 볼륨 내용을 호스트의 압축 파일로 백업하고, 복구 가능 여부를 확인한다. 아래는 `site-data` 볼륨의 `/data/message.txt`를 기준으로 한 백업·복구 예시다. 명령은 WSL의 `developer-workstation` 디렉토리에서 실행한다.
+
+**1. 쓰기 작업 중단 및 백업 파일 생성**
+
+`docker ps --filter volume=site-data`로 볼륨을 사용하는 컨테이너를 확인한다. 이 실습에서는 `volume-test2`를 중지한 후 백업한다. 다른 컨테이너도 같은 볼륨에 쓰고 있다면 함께 중지한다. 데이터베이스는 해당 DB의 덤프 또는 일관된 백업 기능을 사용한다.
+
+```bash
+docker ps --filter volume=site-data
+docker stop volume-test2
+mkdir -p backups
+backup_name="site-data-$(date +%Y%m%d-%H%M%S).tar.gz"
+docker run --rm \
+  --mount type=volume,src=site-data,dst=/data,readonly \
+  --mount type=bind,src="$PWD/backups",dst=/backup \
+  -e BACKUP_NAME="$backup_name" \
+  ubuntu:22.04 sh -c 'tar -czf "/backup/$BACKUP_NAME" -C /data .'
+ls -lh "backups/$backup_name"
+tar -tzf "backups/$backup_name"
+sha256sum "backups/$backup_name" > "backups/$backup_name.sha256"
+sha256sum -c "backups/$backup_name.sha256"
+docker start volume-test2
+```
+
+확인 기준은 압축 파일이 생성되고, 목록에 `./message.txt`가 포함되며, 체크섬 검증이 `OK`를 반환하는 것이다. 백업용 컨테이너는 원본 볼륨을 읽기 전용으로 연결한다. 체크섬은 파일 손상 확인용이며, 데이터 복구 가능 여부는 다음 단계에서 별도로 검증한다.
+
+**2. 새 볼륨으로 복구 및 내용 검증**
+
+원본 `site-data`를 덮어쓰지 않고 새 볼륨으로 복구한다. 아래 예시는 같은 터미널에서 앞 단계의 `backup_name`을 사용한다. 터미널을 다시 열었다면 복구할 파일 이름으로 변수를 지정한다.
+
+```bash
+# 새 이름을 사용해 빈 복구 대상 볼륨 생성
+restore_volume="site-data-restore-$(date +%Y%m%d-%H%M%S)"
+docker volume create "$restore_volume"
+sha256sum -c "backups/$backup_name.sha256"
+# 위 검증이 OK일 때 복구 진행
+docker run --rm \
+  --mount type=volume,src="$restore_volume",dst=/data \
+  --mount type=bind,src="$PWD/backups",dst=/backup,readonly \
+  -e BACKUP_NAME="$backup_name" \
+  ubuntu:22.04 sh -c 'tar -xzf "/backup/$BACKUP_NAME" -C /data'
+docker run --rm \
+  --mount type=volume,src="$restore_volume",dst=/data,readonly \
+  ubuntu:22.04 cat /data/message.txt
+```
+
+실습 데이터가 정상적으로 복구되었을 때의 예상 출력:
+
+```text
+This data will survive container deletion!
+```
+
+내용을 확인한 후 서비스 컨테이너를 새 복구 볼륨에 연결해 사용한다. 복구 검증이 끝날 때까지 원본 볼륨과 백업 파일은 보관한다. `docker volume rm` 또는 `docker volume prune` 실행 전에는 삭제 대상을 확인한다.
+
+**3. 호스트 백업 보관**
+
+`backups/`는 호스트 디스크에 있으므로 Docker 볼륨이 삭제되어도 남는다. 다만 호스트 디스크 고장에는 대비할 수 없으므로 압축 파일과 체크섬 파일을 외장 저장장치나 별도 백업 저장소에 함께 복사한다. 날짜별 백업을 여러 개 유지하고, 중요한 변경 전과 정기 일정에 맞춰 백업한다. 개인정보·비밀정보가 포함된 백업은 공개 GitHub 저장소에 업로드하지 않는다.
+
 ## 10. Git 설정과 GitHub 연결
 
 PowerShell에서 확인한 명령:
@@ -411,3 +470,106 @@ Git 설정 화면의 원격 저장소 정보와 GitHub 커밋 목록을 통해 �
 - **원인 가설:** 해당 태그의 이미지가 로컬에 없다.
 - **확인:** 이어서 레이어 다운로드와 `Status: Downloaded newer image`가 출력되었다.
 - **결과:** 다운로드 후 Ubuntu 쉘 실행 및 NGINX의 `HTTP/1.1 200 OK`를 확인했다. 별도 복구가 필요한 오류가 아니었다.
+
+### 11.4 포트 충돌 진단 및 포트 해제 절차
+
+**문제:** 웹 서버 실행 시 `port is already allocated` 또는 `address already in use`가 발생하면 호스트 포트를 다른 컨테이너나 프로세스가 사용 중인지 확인한다. 아래는 기존 `dev-web`의 8080 포트를 기준으로 한 진단·해제 절차다. 이 절의 출력은 동작을 설명하기 위한 예상 출력 예시이며, 실제 실행 로그는 아니다. PID와 프로세스 이름은 환경에 따라 달라진다.
+
+**1. 포트 사용 주체 확인**
+
+WSL에서 리스닝 소켓과 프로세스 정보를 확인한다. 프로세스 정보가 표시되지 않으면 권한이 허용되는 환경에서만 `sudo`를 사용한다.
+
+```bash
+ss -ltnp 'sport = :8080'
+# lsof가 설치되어 있다면 교차 확인
+lsof -nP -iTCP:8080 -sTCP:LISTEN
+# Docker 컨테이너의 호스트 포트 매핑 확인
+docker ps --filter publish=8080 --format 'table {{.Names}}\t{{.Ports}}\t{{.Status}}'
+```
+
+Linux 호스트에서 Docker 포트를 프록시 프로세스가 점유하는 경우의 예상 출력 예시:
+
+```text
+$ ss -ltnp 'sport = :8080'
+State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      4096   0.0.0.0:8080      0.0.0.0:*       users:(("docker-proxy",pid=12345,fd=4))
+
+$ docker ps --filter publish=8080 --format 'table {{.Names}}\t{{.Ports}}\t{{.Status}}'
+NAMES     PORTS                   STATUS
+dev-web   0.0.0.0:8080->80/tcp   Up 5 minutes
+```
+
+이 예에서는 호스트 8080 포트가 이미 `dev-web`에 연결되어 있으므로 다른 컨테이너가 같은 호스트 주소의 8080 포트를 사용할 수 없다. Docker의 네트워크 구현에 따라 `docker-proxy`가 표시되지 않을 수도 있으므로 컨테이너 포트 매핑도 함께 확인한다.
+
+`ss`의 `LISTEN`, 로컬 주소의 `:8080`, `users`의 프로세스/PID를 확인한다. Docker Desktop이 Windows 쪽에 포트를 게시하면 WSL의 `ss`에는 나오지 않을 수 있다. 이 경우 Windows PowerShell에서 다음을 확인한다.
+
+```powershell
+netstat -ano -p tcp | Select-String ':8080\s'
+# 출력의 로컬 주소가 8080이고 LISTENING인 행의 PID를 조회
+$ownerPid = 12345 # 실제 LISTENING 행에서 확인한 PID로 변경
+Get-Process -Id $ownerPid
+```
+
+Windows의 예상 출력 예시:
+
+```text
+TCP    0.0.0.0:8080    0.0.0.0:0    LISTENING    12345
+```
+
+Docker Desktop 관련 프로세스가 표시되면 해당 프로세스를 종료하지 않고, `docker ps`의 포트 매핑으로 점유 컨테이너를 찾는다. 외부 연결의 원격 포트가 8080인 행을 로컬 포트 점유로 혼동하지 않는다.
+
+**2. 점유 컨테이너 중지 → 포트 해제 확인**
+
+다음 명령은 점유 컨테이너가 실습용 `dev-web`임을 확인한 경우에 실행한다. `stop`은 컨테이너를 삭제하지 않으며, 데이터 보존을 위해 볼륨 삭제 명령은 사용하지 않는다.
+
+```bash
+docker stop dev-web
+docker ps --filter publish=8080 --format 'table {{.Names}}\t{{.Ports}}'
+ss -ltnp 'sport = :8080'
+```
+
+정상적으로 해제되었을 때의 예상 출력 예시:
+
+```text
+$ docker stop dev-web
+dev-web
+$ docker ps --filter publish=8080 --format 'table {{.Names}}\t{{.Ports}}'
+NAMES     PORTS
+$ ss -ltnp 'sport = :8080'
+State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+```
+
+목록에 컨테이너 행이 없고, `ss`에는 헤더만 표시되는 상태를 확인한다. Windows의 `netstat` 필터는 해당 행이 없어 출력이 비어 있어야 한다.
+
+`docker ps`에 실행 중인 점유 컨테이너가 없고 `ss`에 해당 리스너가 없는지 확인한다. Windows에서 포트를 점유했던 경우에는 PowerShell의 `netstat`도 다시 실행하여 `LISTENING` 행이 사라졌는지 확인한다. 컨테이너가 아닌 일반 프로세스라면 PID와 프로그램의 용도를 확인한 뒤 해당 앱이나 서비스의 정상 종료 기능으로 중지한다.
+
+**3. 원하는 컨테이너 실행 → 접속 확인**
+
+```bash
+docker start dev-web
+docker ps --filter name=dev-web
+curl -I http://localhost:8080
+```
+
+재시작 후 예상 출력 예시:
+
+```text
+$ docker start dev-web
+dev-web
+$ curl -I http://localhost:8080
+HTTP/1.1 200 OK
+Server: nginx/...
+Content-Type: text/html
+```
+
+확인 기준은 `dev-web`의 실행 상태와 `8080->80/tcp` 매핑, HTTP 성공 응답이다. 기존 서비스를 계속 유지해야 한다면 점유 서비스를 종료하는 대신 사용하지 않는 호스트 포트로 새 컨테이너를 실행한다.
+
+```bash
+# 8082가 비어 있는지 먼저 확인
+ss -ltnp 'sport = :8082'
+docker ps --filter publish=8082
+docker run -d --name dev-web-alt -p 8082:80 developer-workstation-web:1.0
+curl -I http://localhost:8082
+```
+
+Windows 측 포트 게시 환경에서는 8082도 `netstat`로 함께 확인한다. 해제 순서는 **점유 주체 확인 → 해당 컨테이너/앱 정상 중지 → 리스너 소멸 확인 → 서비스 실행 → HTTP 응답 확인**이다.
