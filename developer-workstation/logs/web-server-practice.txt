@@ -1,0 +1,53 @@
+=== Docker Image ===
+IMAGE                             ID             DISK USAGE   CONTENT SIZE   EXTRA
+developer-workstation-web:1.0     5a82bd0bdb55       93.6MB         26.3MB   U    
+docker/welcome-to-docker:latest   c4d56c24da4f       22.2MB         6.03MB   U    
+hello-world:latest                c567b231f656       25.9kB         9.49kB   U    
+my-web-server:latest              1a30edaf8fef        241MB         63.9MB   U    
+ubuntu:22.04                      076e7bf82319        119MB         31.7MB   U    
+ubuntu:latest                     6a06111c3b0a        163MB         45.9MB   U    
+
+=== Running Containers ===
+CONTAINER ID   IMAGE                           COMMAND                  CREATED          STATUS          PORTS                                     NAMES
+b2ea9966d7cf   developer-workstation-web:1.0   "/docker-entrypoint.…"   21 minutes ago   Up 21 minutes   0.0.0.0:8080->80/tcp, [::]:8080->80/tcp   dev-web
+
+=== Web Server Response ===
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Docker Web Server</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f0f4f8;
+            text-align: center;
+            padding: 100px 20px;
+        }
+
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            max-width: 600px;
+            margin: auto;
+        }
+
+        h1 {
+            color: #2563eb;
+        }
+
+        p {
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Hello, Docker!</h1>
+        <p>My first web server using Docker and NGINX.</p>
+        <p>Developer Workstation Project</p>
+    </div>
+</body>
+</html>

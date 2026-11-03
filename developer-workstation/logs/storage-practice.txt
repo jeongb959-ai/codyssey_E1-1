@@ -1,0 +1,9 @@
+=== Bind Mount ===
+[{"Type":"bind","Source":"/mnt/c/github/codyssey_E1-1/developer-workstation/app","Destination":"/usr/share/nginx/html","Mode":"ro","RW":false,"Propagation":"rprivate"}]
+
+=== Docker Volume ===
+DRIVER    VOLUME NAME
+local     site-data
+
+=== Persistent Data ===
+This data will survive container deletion!

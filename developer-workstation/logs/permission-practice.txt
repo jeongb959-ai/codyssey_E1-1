@@ -1,0 +1,5 @@
+=== File Permission ===
+-rw-r--r-- 1 ruav ruav 0 Nov  3 14:41 permissions/permission-test.txt
+
+=== Directory Permission ===
+drwxr-xr-x 1 ruav ruav 4096 Nov  3 14:42 permissions/test-directory
